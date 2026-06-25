@@ -1,5 +1,6 @@
 from fastapi import APIRouter, Depends, File, UploadFile, status
-
+from app.services.gemini_embedding_service import GeminiEmbeddingService
+from app.services.pinecone_vector_service import PineconeVectorService
 from app.api.dependencies import get_current_user
 from app.models.auth import CurrentUser
 from app.models.document import DocumentListItem, DocumentUploadResponse
@@ -58,11 +59,28 @@ async def upload_document(
 
         chunks = chunking_service.chunk_text(extracted_text)
 
-        document_chunk_service.replace_chunks(
+        saved_chunks = document_chunk_service.replace_chunks(
             document_id=document["id"],
             user_id=current_user.id,
             chunks=chunks,
         )
+
+        embedding_service = GeminiEmbeddingService()
+        vector_service = PineconeVectorService()
+
+        embeddings = embedding_service.embed_documents(
+            [chunk["content"] for chunk in saved_chunks]
+        )
+
+        vector_service.upsert_document_chunks(
+            document_id=document["id"],
+            user_id=current_user.id,
+            file_name=document["file_name"],
+            chunks=saved_chunks,
+            embeddings=embeddings,
+        )
+
+
 
         document = document_service.update_document_status(
             document_id=document["id"],

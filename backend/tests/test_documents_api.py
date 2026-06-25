@@ -1,5 +1,7 @@
 from fastapi.testclient import TestClient
-
+from app.services.document_chunk_service import document_chunk_service
+from app.services.gemini_embedding_service import GeminiEmbeddingService
+from app.services.pinecone_vector_service import PineconeVectorService
 from app.api.dependencies import get_current_user
 from app.main import app
 from app.models.auth import CurrentUser
@@ -56,14 +58,19 @@ def test_upload_document_returns_created_response(monkeypatch) -> None:
     )
 
     monkeypatch.setattr(
-        DocumentContentService,
-        "save_content",
-        lambda self, document_id, user_id, extracted_text: {
-            "document_id": document_id,
-            "user_id": user_id,
-            "extracted_text": extracted_text,
-            "character_count": len(extracted_text),
-        },
+        document_chunk_service,
+        "replace_chunks",
+        lambda document_id, user_id, chunks: [
+            {
+                "document_id": document_id,
+                "user_id": user_id,
+                "chunk_index": index,
+                "content": chunk,
+                "character_count": len(chunk),
+                "metadata": {"chunk_strategy": "character_overlap"},
+            }
+            for index, chunk in enumerate(chunks)
+        ],
     )
 
     monkeypatch.setattr(
@@ -71,6 +78,19 @@ def test_upload_document_returns_created_response(monkeypatch) -> None:
         "update_document_status",
         lambda **kwargs: processed_document(),
     )
+
+    monkeypatch.setattr(
+        GeminiEmbeddingService,
+        "embed_documents",
+        lambda self, texts: [[0.1] * 768 for _ in texts],
+    )
+
+    monkeypatch.setattr(
+        PineconeVectorService,
+        "upsert_document_chunks",
+        lambda self, **kwargs: None,
+    )
+
 
     response = client.post(
         "/api/v1/documents/upload",
@@ -82,6 +102,8 @@ def test_upload_document_returns_created_response(monkeypatch) -> None:
     assert response.status_code == 201
     assert response.json()["file_name"] == "policy.txt"
     assert response.json()["status"] == "processed"
+
+
 
 
 def test_list_documents_returns_current_users_documents(monkeypatch) -> None:

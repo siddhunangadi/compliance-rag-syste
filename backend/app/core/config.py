@@ -21,6 +21,14 @@ class Settings(BaseSettings):
         extra="ignore",
     )
 
+    gemini_api_key: str
+    gemini_embedding_model: str = "gemini-embedding-2"
+    gemini_embedding_dimension: int = 768
+
+    pinecone_api_key: str
+    pinecone_index_name: str
+    pinecone_namespace: str = "documents"
+
 
 @lru_cache
 def get_settings() -> Settings:
