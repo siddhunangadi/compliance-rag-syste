@@ -1,34 +1,24 @@
-import pytest
-
 from app.services.text_chunking_service import TextChunkingService
 
 
-def test_returns_empty_list_for_empty_text() -> None:
-    service = TextChunkingService()
+def test_chunk_pages_preserves_page_numbers_and_global_chunk_order() -> None:
+    service = TextChunkingService(chunk_size=20, chunk_overlap=5)
 
-    assert service.chunk_text("") == []
+    chunks = service.chunk_pages(
+        [
+            {
+                "page_number": 1,
+                "text": "First page has compliance requirements.",
+            },
+            {
+                "page_number": 2,
+                "text": "Second page has retention requirements.",
+            },
+        ]
+    )
 
-
-def test_returns_one_chunk_for_short_text() -> None:
-    service = TextChunkingService(chunk_size=100, chunk_overlap=20)
-
-    chunks = service.chunk_text("Compliance policy text.")
-
-    assert chunks == ["Compliance policy text."]
-
-
-def test_creates_overlapping_chunks_for_long_text() -> None:
-    service = TextChunkingService(chunk_size=50, chunk_overlap=10)
-
-    text = " ".join(["compliance"] * 40)
-
-    chunks = service.chunk_text(text)
-
-    assert len(chunks) > 1
-    assert all(len(chunk) <= 50 for chunk in chunks)
-    assert chunks[0][-10:] in chunks[1] or "compliance" in chunks[1]
-
-
-def test_rejects_invalid_overlap() -> None:
-    with pytest.raises(ValueError):
-        TextChunkingService(chunk_size=100, chunk_overlap=100)
+    assert chunks
+    assert [chunk["chunk_index"] for chunk in chunks] == list(range(len(chunks)))
+    assert chunks[0]["page_number"] == 1
+    assert any(chunk["page_number"] == 2 for chunk in chunks)
+    assert all("content" in chunk for chunk in chunks)

@@ -38,7 +38,7 @@ class DocumentContentService:
         user_id: str,
     ) -> dict | None:
         """Return extracted content only if it belongs to the current user."""
-        client = get_supabase_client()
+        client = get_supabase_service_client()
 
         result = (
             client.table("document_contents")
@@ -50,3 +50,6 @@ class DocumentContentService:
         )
 
         return result.data
+
+
+document_content_service = DocumentContentService()

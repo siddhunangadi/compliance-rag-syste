@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import re
+from typing import Any
 
 
 class TextChunkingService:
@@ -62,6 +63,35 @@ class TextChunkingService:
             start = max(end - self.chunk_overlap, start + 1)
 
         return chunks
+
+    def chunk_pages(
+        self,
+        pages: list[dict[str, int | str]],
+    ) -> list[dict[str, Any]]:
+        """
+        Chunk each extracted page independently.
+
+        A chunk never crosses a PDF page boundary, so its page citation remains
+        precise. Chunk indexes are assigned globally in document order.
+        """
+        page_chunks: list[dict[str, Any]] = []
+        chunk_index = 0
+
+        for page in pages:
+            page_number = int(page["page_number"])
+            page_text = str(page["text"])
+
+            for content in self.chunk_text(page_text):
+                page_chunks.append(
+                    {
+                        "chunk_index": chunk_index,
+                        "content": content,
+                        "page_number": page_number,
+                    }
+                )
+                chunk_index += 1
+
+        return page_chunks
 
     @staticmethod
     def _normalize_text(text: str) -> str:

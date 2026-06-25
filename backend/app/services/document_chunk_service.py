@@ -1,3 +1,5 @@
+from typing import Any
+
 from app.services.supabase_client import get_supabase_service_client
 
 
@@ -9,9 +11,9 @@ class DocumentChunkService:
         *,
         document_id: str,
         user_id: str,
-        chunks: list[str],
+        chunks: list[dict[str, Any]],
     ) -> list[dict]:
-        """Replace all chunks for one document atomically enough for ingestion."""
+        """Replace all page-aware chunks for one document."""
         client = get_supabase_service_client()
 
         (
@@ -29,14 +31,16 @@ class DocumentChunkService:
             {
                 "document_id": document_id,
                 "user_id": user_id,
-                "chunk_index": index,
-                "content": chunk,
-                "character_count": len(chunk),
+                "chunk_index": int(chunk["chunk_index"]),
+                "content": str(chunk["content"]),
+                "character_count": len(str(chunk["content"])),
+                "page_number": int(chunk["page_number"]),
                 "metadata": {
-                    "chunk_strategy": "character_overlap",
+                    "chunk_strategy": "page_aware_character_overlap",
+                    "page_number": int(chunk["page_number"]),
                 },
             }
-            for index, chunk in enumerate(chunks)
+            for chunk in chunks
         ]
 
         response = client.table("document_chunks").insert(rows).execute()

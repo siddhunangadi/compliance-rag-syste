@@ -24,7 +24,7 @@ class PineconeVectorService:
         chunks: list[dict],
         embeddings: list[list[float]],
     ) -> None:
-        """Upsert one vector per stored document chunk."""
+        """Upsert one vector per stored page-aware document chunk."""
         if len(chunks) != len(embeddings):
             raise ValueError("Each chunk must have exactly one embedding.")
 
@@ -39,7 +39,8 @@ class PineconeVectorService:
                         "user_id": user_id,
                         "document_id": document_id,
                         "file_name": file_name,
-                        "chunk_index": chunk["chunk_index"],
+                        "chunk_index": int(chunk["chunk_index"]),
+                        "page_number": int(chunk["page_number"]),
                         "content": chunk["content"],
                     },
                 }
@@ -50,6 +51,21 @@ class PineconeVectorService:
                 vectors=vectors,
                 namespace=self.namespace,
             )
+
+    def delete_document_vectors(
+        self,
+        *,
+        document_id: str,
+        user_id: str,
+    ) -> None:
+        """Delete vectors belonging to one user-owned document."""
+        self.index.delete(
+            namespace=self.namespace,
+            filter={
+                "document_id": {"$eq": document_id},
+                "user_id": {"$eq": user_id},
+            },
+        )
 
     def query_user_chunks(
         self,
@@ -79,6 +95,7 @@ class PineconeVectorService:
                     "document_id": metadata["document_id"],
                     "file_name": metadata["file_name"],
                     "chunk_index": metadata["chunk_index"],
+                    "page_number": metadata.get("page_number", 1),
                     "content": metadata["content"],
                     "score": float(match.score),
                 }
