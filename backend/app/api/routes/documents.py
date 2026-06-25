@@ -12,6 +12,7 @@ from fastapi import (
 from postgrest.exceptions import APIError
 
 from app.api.dependencies import get_current_user
+from app.api.rate_limit import enforce_user_rate_limit
 from app.models.auth import CurrentUser
 from app.models.document import (
     DocumentListItem,
@@ -98,6 +99,13 @@ async def upload_document(
     current_user: CurrentUser = Depends(get_current_user),
 ) -> DocumentUploadResponse:
     """Upload one document and queue ingestion."""
+    enforce_user_rate_limit(
+        user_id=current_user.id,
+        action="document_upload",
+        limit=10,
+        window_seconds=600,
+    )
+
     file_content = await file.read()
 
     document = document_service.upload_document(
@@ -145,6 +153,13 @@ def retry_document_ingestion(
     current_user: CurrentUser = Depends(get_current_user),
 ) -> DocumentUploadResponse:
     """Queue a policy-checked retry for one failed user-owned document."""
+    enforce_user_rate_limit(
+        user_id=current_user.id,
+        action="document_retry",
+        limit=5,
+        window_seconds=600,
+    )
+
     document = document_service.get_document(
         document_id=document_id,
         user_id=current_user.id,

@@ -3,6 +3,7 @@ import re
 from fastapi import APIRouter, Depends
 
 from app.api.dependencies import get_current_user
+from app.api.rate_limit import enforce_user_rate_limit
 from app.models.auth import CurrentUser
 from app.models.rag import AskQuestionRequest, AskQuestionResponse, Citation
 from app.services.rag_answer_service import RAGAnswerService
@@ -60,6 +61,13 @@ def ask_question(
     current_user: CurrentUser = Depends(get_current_user),
 ) -> AskQuestionResponse:
     """Retrieve evidence and generate a grounded answer."""
+    enforce_user_rate_limit(
+        user_id=current_user.id,
+        action="rag_ask",
+        limit=30,
+        window_seconds=600,
+    )
+
     sources = retrieval_service.search(
         user_id=current_user.id,
         query=payload.question,
