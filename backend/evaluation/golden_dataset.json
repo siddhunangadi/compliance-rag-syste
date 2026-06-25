@@ -1,0 +1,15 @@
+{
+  "version": "1.0",
+  "description": "Golden retrieval evaluation cases for the Compliance RAG System.",
+  "cases": [
+    {
+      "id": "sample-exact-regulation-001",
+      "question": "What does GDPR Article 17 say about the right to erasure?",
+      "expected_document_id": "replace-with-real-document-id",
+      "expected_page_numbers": [1],
+      "expected_chunk_indexes": [0],
+      "category": "exact_regulation_reference",
+      "notes": "Replace this sample with evidence from an uploaded compliance document."
+    }
+  ]
+}
