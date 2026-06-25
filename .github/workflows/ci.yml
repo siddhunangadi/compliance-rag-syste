@@ -14,6 +14,15 @@ jobs:
     name: Backend tests
     runs-on: ubuntu-latest
 
+    env:
+      APP_ENV: testing
+      GEMINI_API_KEY: test-gemini-api-key
+      PINECONE_API_KEY: test-pinecone-api-key
+      PINECONE_INDEX_NAME: test-pinecone-index
+      SUPABASE_URL: https://example.supabase.co
+      SUPABASE_ANON_KEY: test-supabase-anon-key
+      SUPABASE_SERVICE_ROLE_KEY: test-supabase-service-role-key
+
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
