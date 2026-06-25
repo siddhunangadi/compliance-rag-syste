@@ -3,8 +3,10 @@ from fastapi import APIRouter, Depends, File, UploadFile, status
 from app.api.dependencies import get_current_user
 from app.models.auth import CurrentUser
 from app.models.document import DocumentListItem, DocumentUploadResponse
-from app.services.document_service import document_service
+from app.services.document_chunk_service import document_chunk_service
 from app.services.document_content_service import DocumentContentService
+from app.services.document_service import document_service
+from app.services.text_chunking_service import TextChunkingService
 from app.services.text_extraction_service import (
     TextExtractionService,
     UnsupportedDocumentTypeError,
@@ -23,7 +25,7 @@ async def upload_document(
     file: UploadFile = File(...),
     current_user: CurrentUser = Depends(get_current_user),
 ) -> DocumentUploadResponse:
-    """Upload one supported document for the authenticated user."""
+    """Upload, extract, chunk, and store one supported document."""
     file_content = await file.read()
 
     document = document_service.upload_document(
@@ -31,6 +33,7 @@ async def upload_document(
         uploaded_file=file,
         file_content=file_content,
     )
+
     document_service.update_document_status(
         document_id=document["id"],
         user_id=current_user.id,
@@ -39,6 +42,7 @@ async def upload_document(
 
     extraction_service = TextExtractionService()
     content_service = DocumentContentService()
+    chunking_service = TextChunkingService()
 
     try:
         extracted_text = extraction_service.extract_text(
@@ -50,6 +54,14 @@ async def upload_document(
             document_id=document["id"],
             user_id=current_user.id,
             extracted_text=extracted_text,
+        )
+
+        chunks = chunking_service.chunk_text(extracted_text)
+
+        document_chunk_service.replace_chunks(
+            document_id=document["id"],
+            user_id=current_user.id,
+            chunks=chunks,
         )
 
         document = document_service.update_document_status(
@@ -66,13 +78,12 @@ async def upload_document(
             error_message=str(exc),
         )
 
-    except Exception as exc:
-        
-        document_service.update_document_status(
+    except Exception:
+        document = document_service.update_document_status(
             document_id=document["id"],
             user_id=current_user.id,
             status="failed",
-            error_message=f"Document text extraction failed: {str(exc)}",
+            error_message="Document text extraction failed.",
         )
 
     return DocumentUploadResponse(**document)
