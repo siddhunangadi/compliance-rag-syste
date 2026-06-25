@@ -1,4 +1,3 @@
-
 from __future__ import annotations
 
 import logging
@@ -14,6 +13,7 @@ from app.services.supabase_client import get_supabase_service_client
 from app.services.text_chunking_service import TextChunkingService
 from app.services.text_extraction_service import (
     TextExtractionService,
+    UnreadableDocumentError,
     UnsupportedDocumentTypeError,
 )
 
@@ -84,7 +84,10 @@ class IngestionWorkerService:
             )
 
             if not extracted_document.full_text:
-                raise ValueError("No readable text could be extracted.")
+                raise UnreadableDocumentError(
+                    "No readable text was found in this document. "
+                    "Please upload a text-based document."
+                )
 
             processing_stage = "content storage"
             ingestion_job_service.update_processing_stage(
@@ -111,7 +114,10 @@ class IngestionWorkerService:
             chunks = chunking_service.chunk_pages(extracted_document.pages)
 
             if not chunks:
-                raise ValueError("No readable text chunks were created.")
+                raise UnreadableDocumentError(
+                    "No readable text was found in this document. "
+                    "Please upload a text-based document."
+                )
 
             processing_stage = "chunk storage"
             ingestion_job_service.update_processing_stage(
@@ -176,12 +182,14 @@ class IngestionWorkerService:
 
             return document
 
-        except UnsupportedDocumentTypeError as exc:
+        except (UnsupportedDocumentTypeError, UnreadableDocumentError) as exc:
             logger.warning(
-                "Unsupported document type: job_id=%s document_id=%s user_id=%s error=%s",
+                "Document ingestion rejected: job_id=%s document_id=%s "
+                "user_id=%s stage=%s error=%s",
                 job_id,
                 document_id,
                 user_id,
+                processing_stage,
                 exc,
             )
             error_message = str(exc)

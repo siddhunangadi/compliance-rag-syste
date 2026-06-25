@@ -5,10 +5,15 @@ from io import BytesIO
 from pathlib import Path
 
 from pypdf import PdfReader
+from pypdf.errors import PdfReadError
 
 
 class UnsupportedDocumentTypeError(ValueError):
     """Raised when a file type is not supported for text extraction."""
+
+
+class UnreadableDocumentError(ValueError):
+    """Raised when a supported document cannot be safely read."""
 
 
 @dataclass(frozen=True)
@@ -57,12 +62,7 @@ class TextExtractionService:
         )
 
     def extract_text(self, file_name: str, file_bytes: bytes) -> str:
-        """
-        Backward-compatible text-only extraction API.
-
-        Existing callers and tests can keep using this while ingestion moves to
-        `extract_document`.
-        """
+        """Backward-compatible text-only extraction API."""
         return self.extract_document(
             file_name=file_name,
             file_bytes=file_bytes,
@@ -76,21 +76,31 @@ class TextExtractionService:
     @staticmethod
     def _extract_pdf_document(file_bytes: bytes) -> ExtractedDocument:
         """Extract PDF text while retaining each readable physical page."""
-        reader = PdfReader(BytesIO(file_bytes))
+        try:
+            reader = PdfReader(BytesIO(file_bytes))
+        except (PdfReadError, OSError, ValueError, EOFError) as exc:
+            raise UnreadableDocumentError(
+                "This PDF could not be read. Please upload a valid, non-corrupted PDF."
+            ) from exc
 
         pages: list[dict[str, int | str]] = []
 
-        for page_number, page in enumerate(reader.pages, start=1):
-            page_text = page.extract_text() or ""
-            cleaned_page_text = page_text.strip()
+        try:
+            for page_number, page in enumerate(reader.pages, start=1):
+                page_text = page.extract_text() or ""
+                cleaned_page_text = page_text.strip()
 
-            if cleaned_page_text:
-                pages.append(
-                    {
-                        "page_number": page_number,
-                        "text": cleaned_page_text,
-                    }
-                )
+                if cleaned_page_text:
+                    pages.append(
+                        {
+                            "page_number": page_number,
+                            "text": cleaned_page_text,
+                        }
+                    )
+        except (PdfReadError, OSError, ValueError, EOFError) as exc:
+            raise UnreadableDocumentError(
+                "This PDF could not be read. Please upload a valid, non-corrupted PDF."
+            ) from exc
 
         full_text = "\n\n".join(
             str(page["text"])
