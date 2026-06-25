@@ -85,6 +85,8 @@ async def recover_interrupted_ingestion_jobs() -> None:
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     """Run application startup and shutdown logic."""
+    settings.validate_production_settings()
+
     logger.info(
         "%s started in %s mode",
         settings.app_name,
@@ -107,7 +109,7 @@ app = FastAPI(
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=[settings.frontend_url],
+    allow_origins=settings.cors_origins,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
