@@ -1,5 +1,6 @@
 import os
 import time
+from datetime import datetime
 from typing import Any
 
 import requests
@@ -9,13 +10,34 @@ from supabase import Client, create_client
 
 load_dotenv()
 
-BACKEND_URL = os.getenv("BACKEND_URL", "http://localhost:8000")
+BACKEND_URL = os.getenv("BACKEND_URL", "http://localhost:8000").rstrip("/")
 SUPABASE_URL = os.getenv("SUPABASE_URL", "")
 SUPABASE_ANON_KEY = os.getenv("SUPABASE_ANON_KEY", "")
 
 ALLOWED_TYPES = ["pdf", "docx", "txt", "csv", "xlsx"]
+MAX_UPLOAD_SIZE_BYTES = 20 * 1024 * 1024
 NOT_FOUND_ANSWER = "I could not find an answer in your uploaded documents."
 PENDING_DOCUMENT_STATUSES = {"uploaded", "processing"}
+
+STATUS_LABELS = {
+    "uploaded": "Queued",
+    "processing": "Processing",
+    "processed": "Ready",
+    "failed": "Failed",
+}
+
+STAGE_LABELS = {
+    "queued": "Waiting in queue",
+    "starting": "Starting processing",
+    "file download": "Downloading file",
+    "text extraction": "Extracting text",
+    "content storage": "Saving document content",
+    "text chunking": "Creating searchable chunks",
+    "chunk storage": "Saving chunks",
+    "embedding generation": "Generating embeddings",
+    "vector indexing": "Indexing for search",
+    "completed": "Processing complete",
+}
 
 
 @st.cache_resource
@@ -52,6 +74,37 @@ def get_api_error_message(
     return fallback_message
 
 
+def format_file_size(file_size_bytes: int | None) -> str:
+    """Render bytes in a compact human-readable form."""
+    if not file_size_bytes:
+        return "Unknown size"
+
+    units = ["B", "KB", "MB", "GB"]
+    size = float(file_size_bytes)
+
+    for unit in units:
+        if size < 1024 or unit == units[-1]:
+            if unit == "B":
+                return f"{int(size)} {unit}"
+            return f"{size:.1f} {unit}"
+        size /= 1024
+
+    return f"{file_size_bytes} B"
+
+
+def format_created_at(value: str | None) -> str:
+    """Render an ISO timestamp without making timezone claims."""
+    if not value:
+        return "Unknown date"
+
+    try:
+        return datetime.fromisoformat(value.replace("Z", "+00:00")).strftime(
+            "%d %b %Y, %I:%M %p"
+        )
+    except ValueError:
+        return value
+
+
 def get_documents() -> list[dict[str, Any]] | None:
     """Fetch documents belonging to the authenticated user."""
     try:
@@ -65,12 +118,7 @@ def get_documents() -> list[dict[str, Any]] | None:
         return None
 
     if response.status_code != 200:
-        st.error(
-            get_api_error_message(
-                response,
-                "Could not load documents.",
-            )
-        )
+        st.error(get_api_error_message(response, "Could not load documents."))
         return None
 
     try:
@@ -80,10 +128,30 @@ def get_documents() -> list[dict[str, Any]] | None:
         return None
 
 
+def get_ingestion_status(document_id: str) -> dict[str, Any] | None:
+    """Fetch the latest ingestion job state for one document."""
+    try:
+        response = requests.get(
+            f"{BACKEND_URL}/api/v1/documents/{document_id}/ingestion-status",
+            headers=get_auth_headers(),
+            timeout=20,
+        )
+    except requests.RequestException:
+        return None
+
+    if response.status_code != 200:
+        return None
+
+    try:
+        return response.json()
+    except ValueError:
+        return None
+
+
 def show_auth_screen() -> None:
     """Render sign-in and account-creation UI."""
     st.title("Compliance RAG System")
-    st.caption("Ask questions about your compliance documents with evidence.")
+    st.caption("Ask grounded questions about your compliance documents.")
 
     sign_in_tab, create_account_tab = st.tabs(["Sign in", "Create account"])
     supabase = get_supabase_client()
@@ -96,12 +164,16 @@ def show_auth_screen() -> None:
                 type="password",
                 key="sign_in_password",
             )
-            submitted = st.form_submit_button("Sign in")
+            submitted = st.form_submit_button("Sign in", type="primary")
 
         if submitted:
+            if not email.strip() or not password:
+                st.warning("Enter both email and password.")
+                return
+
             try:
                 response = supabase.auth.sign_in_with_password(
-                    {"email": email, "password": password}
+                    {"email": email.strip(), "password": password}
                 )
                 st.session_state.session = response.session
                 st.rerun()
@@ -116,16 +188,19 @@ def show_auth_screen() -> None:
                 type="password",
                 key="create_account_password",
             )
-            submitted = st.form_submit_button("Create account")
+            submitted = st.form_submit_button("Create account", type="primary")
 
         if submitted:
+            if not email.strip() or len(password) < 6:
+                st.warning("Use a valid email and a password with at least 6 characters.")
+                return
+
             try:
                 response = supabase.auth.sign_up(
-                    {"email": email, "password": password}
+                    {"email": email.strip(), "password": password}
                 )
                 st.success(
-                    "Account created. Check your email if confirmation is enabled, "
-                    "then sign in."
+                    "Account created. Check your email if confirmation is enabled."
                 )
 
                 if response.session:
@@ -135,13 +210,17 @@ def show_auth_screen() -> None:
                 st.error(f"Unable to create account: {exc}")
 
 
-def upload_document(uploaded_file: Any) -> None:
+def upload_document(uploaded_file: Any) -> bool:
     """Send one selected document to the FastAPI upload endpoint."""
     headers = get_auth_headers()
 
     if not headers:
         st.error("Your session is missing. Please sign in again.")
-        return
+        return False
+
+    if uploaded_file.size > MAX_UPLOAD_SIZE_BYTES:
+        st.error("File is too large. Maximum upload size is 20 MB.")
+        return False
 
     files = {
         "file": (
@@ -158,21 +237,16 @@ def upload_document(uploaded_file: Any) -> None:
             files=files,
             timeout=120,
         )
-
-        if response.status_code == 201:
-            st.success(f"Uploaded: {response.json()['file_name']}")
-            st.rerun()
-            return
-
-        st.error(
-            get_api_error_message(
-                response,
-                "Upload failed.",
-            )
-        )
-
     except requests.RequestException as exc:
         st.error(f"Could not reach the backend: {exc}")
+        return False
+
+    if response.status_code == 201:
+        st.success(f"Uploaded {response.json()['file_name']}. Processing has started.")
+        return True
+
+    st.error(get_api_error_message(response, "Upload failed."))
+    return False
 
 
 def retry_document(document_id: str) -> bool:
@@ -183,21 +257,15 @@ def retry_document(document_id: str) -> bool:
             headers=get_auth_headers(),
             timeout=30,
         )
-
-        if response.status_code == 200:
-            return True
-
-        st.error(
-            get_api_error_message(
-                response,
-                "Could not retry document processing.",
-            )
-        )
-        return False
-
     except requests.RequestException as exc:
         st.error(f"Could not reach the backend: {exc}")
         return False
+
+    if response.status_code == 200:
+        return True
+
+    st.error(get_api_error_message(response, "Could not retry document processing."))
+    return False
 
 
 def delete_document(document_id: str) -> bool:
@@ -208,33 +276,28 @@ def delete_document(document_id: str) -> bool:
             headers=get_auth_headers(),
             timeout=30,
         )
-
-        if response.status_code == 204:
-            return True
-
-        st.error(
-            get_api_error_message(
-                response,
-                "Could not delete document.",
-            )
-        )
-        return False
-
     except requests.RequestException as exc:
         st.error(f"Could not reach the backend: {exc}")
         return False
+
+    if response.status_code == 204:
+        return True
+
+    st.error(get_api_error_message(response, "Could not delete document."))
+    return False
 
 
 def remove_duplicate_citations(
     citations: list[dict[str, Any]],
 ) -> list[dict[str, Any]]:
-    """Keep one citation per file/chunk pair."""
+    """Keep one citation per file/page/chunk pair."""
     unique_citations = []
     seen_citations = set()
 
     for citation in citations:
         citation_key = (
             citation.get("file_name"),
+            citation.get("page_number"),
             citation.get("chunk_index"),
         )
 
@@ -255,9 +318,19 @@ def show_citations(citations: list[dict[str, Any]]) -> None:
     for citation in citations:
         source_number = citation.get("source_number", "?")
         file_name = citation.get("file_name", "Unknown document")
-        excerpt = citation.get("excerpt", "").strip()
+        page_number = citation.get("page_number")
+        excerpt = str(citation.get("excerpt", "")).strip()
+        score = citation.get("score")
 
-        with st.expander(f"[{source_number}] {file_name}", expanded=False):
+        source_label = f"[{source_number}] {file_name}"
+
+        if page_number:
+            source_label += f" · page {page_number}"
+
+        with st.expander(source_label, expanded=False):
+            if score is not None:
+                st.caption(f"Retrieval confidence: {float(score):.0%}")
+
             if excerpt:
                 st.caption("Supporting excerpt")
                 st.write(excerpt)
@@ -265,21 +338,16 @@ def show_citations(citations: list[dict[str, Any]]) -> None:
                 st.info("No preview is available for this source.")
 
 
-def show_rag_question_answering(
-    processed_document_count: int,
-) -> None:
+def show_rag_question_answering(processed_document_count: int) -> None:
     """Render grounded question answering with source citations."""
     st.divider()
-    st.subheader("Ask my documents")
+    st.subheader("Ask your documents")
     st.caption(
-        "Answers are generated only from retrieved document evidence "
-        "and include supporting excerpts."
+        "Answers are generated only from retrieved document evidence and include sources."
     )
 
     if processed_document_count == 0:
-        st.info(
-            "Upload and process at least one document before asking a question."
-        )
+        st.info("Upload and process at least one document before asking a question.")
         return
 
     with st.form("rag_question_form", clear_on_submit=False):
@@ -289,10 +357,7 @@ def show_rag_question_answering(
             key="rag_question",
             height=100,
         )
-        submitted = st.form_submit_button(
-            "Get grounded answer",
-            type="primary",
-        )
+        submitted = st.form_submit_button("Get grounded answer", type="primary")
 
     if not submitted:
         return
@@ -308,10 +373,7 @@ def show_rag_question_answering(
             response = requests.post(
                 f"{BACKEND_URL}/api/v1/rag/ask",
                 headers=get_auth_headers(),
-                json={
-                    "question": cleaned_question,
-                    "top_k": 5,
-                },
+                json={"question": cleaned_question, "top_k": 5},
                 timeout=120,
             )
     except requests.RequestException as exc:
@@ -319,12 +381,7 @@ def show_rag_question_answering(
         return
 
     if response.status_code != 200:
-        st.error(
-            get_api_error_message(
-                response,
-                "Could not generate an answer.",
-            )
-        )
+        st.error(get_api_error_message(response, "Could not generate an answer."))
         return
 
     try:
@@ -334,9 +391,7 @@ def show_rag_question_answering(
         return
 
     answer = str(answer_data.get("answer", "")).strip()
-    citations = remove_duplicate_citations(
-        answer_data.get("citations", [])
-    )
+    citations = remove_duplicate_citations(answer_data.get("citations", []))
 
     st.markdown("### Answer")
 
@@ -348,6 +403,42 @@ def show_rag_question_answering(
     show_citations(citations)
 
 
+def show_document_status(document: dict[str, Any]) -> None:
+    """Render status and latest processing stage for one document."""
+    document_status = document.get("status", "uploaded")
+    status_label = STATUS_LABELS.get(document_status, document_status.title())
+
+    if document_status == "processed":
+        st.success(f"Status: {status_label}")
+        return
+
+    if document_status == "failed":
+        st.error(f"Status: {status_label}")
+        error_message = document.get("error_message") or "Document processing failed."
+        st.caption(error_message)
+        return
+
+    job = get_ingestion_status(str(document["id"]))
+
+    if document_status == "uploaded":
+        st.info(f"Status: {status_label}")
+    else:
+        st.warning(f"Status: {status_label}")
+
+    if not job:
+        st.caption("Waiting for ingestion status...")
+        return
+
+    stage = job.get("processing_stage") or "queued"
+    stage_label = STAGE_LABELS.get(stage, stage.title())
+    attempt_count = job.get("attempt_count", 0)
+
+    st.caption(f"{stage_label} · Attempt {attempt_count}")
+
+    if job.get("error_message"):
+        st.caption(f"Latest job message: {job['error_message']}")
+
+
 def show_document_list(documents: list[dict[str, Any]]) -> None:
     """Render the user's uploaded documents and document actions."""
     st.subheader("My documents")
@@ -357,45 +448,35 @@ def show_document_list(documents: list[dict[str, Any]]) -> None:
         return
 
     for document in documents:
-        action_columns = st.columns([5, 1, 1])
+        action_columns = st.columns([6, 1, 1])
 
         with action_columns[0]:
             st.markdown(f"**{document['file_name']}**")
-            st.caption(
-                f"{document['mime_type']} · "
-                f"{document['file_size_bytes']} bytes · "
-                f"Status: {document['status']}"
-            )
 
-            if document["status"] == "uploaded":
-                st.info("Queued for processing.")
+            details = [
+                document.get("mime_type", "Unknown type"),
+                format_file_size(document.get("file_size_bytes")),
+            ]
 
-            if document["status"] == "processing":
-                st.info("Processing document...")
+            if document.get("page_count"):
+                details.append(f"{document['page_count']} page(s)")
 
-            if document["status"] == "failed":
-                error_message = document.get(
-                    "error_message",
-                    "Document processing failed.",
-                )
-                st.error(error_message)
+            if document.get("created_at"):
+                details.append(f"Uploaded {format_created_at(document['created_at'])}")
+
+            st.caption(" · ".join(details))
+            show_document_status(document)
 
         with action_columns[1]:
-            if document["status"] == "failed":
-                if st.button(
-                    "Retry",
-                    key=f"retry_document_{document['id']}",
-                ):
-                    if retry_document(document["id"]):
+            if document.get("status") == "failed":
+                if st.button("Retry", key=f"retry_document_{document['id']}"):
+                    if retry_document(str(document["id"])):
                         st.success("Retry queued.")
                         st.rerun()
 
         with action_columns[2]:
-            if st.button(
-                "Delete",
-                key=f"delete_document_{document['id']}",
-            ):
-                if delete_document(document["id"]):
+            if st.button("Delete", key=f"delete_document_{document['id']}"):
+                if delete_document(str(document["id"])):
                     st.success("Document deleted.")
                     st.rerun()
 
@@ -413,8 +494,7 @@ def schedule_document_status_refresh(documents: list[dict[str, Any]]) -> None:
         return
 
     st.caption("Refreshing document status automatically...")
-
-    time.sleep(2)
+    time.sleep(3)
     st.rerun()
 
 
@@ -424,9 +504,7 @@ def show_document_dashboard() -> None:
     user = session.user
 
     st.title("Compliance RAG System")
-    st.caption(
-        "Upload compliance documents and ask grounded questions with evidence."
-    )
+    st.caption("Upload compliance documents and ask grounded questions with evidence.")
 
     left, right = st.columns([4, 1])
 
@@ -441,14 +519,22 @@ def show_document_dashboard() -> None:
 
     st.divider()
     st.subheader("Upload a document")
+    st.caption("PDF, DOCX, TXT, CSV, XLSX · Maximum size: 20 MB")
 
     uploaded_file = st.file_uploader(
-        "Supported formats: PDF, DOCX, TXT, CSV, XLSX · Maximum size: 20 MB",
+        "Choose a compliance document",
         type=ALLOWED_TYPES,
+        label_visibility="collapsed",
     )
 
-    if uploaded_file and st.button("Upload document"):
-        upload_document(uploaded_file)
+    if uploaded_file:
+        st.caption(
+            f"Selected: {uploaded_file.name} · {format_file_size(uploaded_file.size)}"
+        )
+
+    if uploaded_file and st.button("Upload document", type="primary"):
+        if upload_document(uploaded_file):
+            st.rerun()
 
     st.divider()
 
@@ -475,6 +561,10 @@ def main() -> None:
         page_icon="📚",
         layout="centered",
     )
+
+    if not SUPABASE_URL or not SUPABASE_ANON_KEY:
+        st.error("Missing SUPABASE_URL or SUPABASE_ANON_KEY in your environment.")
+        return
 
     if "session" not in st.session_state:
         show_auth_screen()
