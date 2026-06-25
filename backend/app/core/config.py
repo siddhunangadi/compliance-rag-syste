@@ -8,6 +8,7 @@ class Settings(BaseSettings):
 
     app_name: str = "Compliance RAG System"
     app_env: str = "development"
+    frontend_url: str = "http://localhost:8501"
 
     model_config = SettingsConfigDict(
         env_file=".env",
