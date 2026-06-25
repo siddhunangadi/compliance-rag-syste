@@ -7,16 +7,21 @@ from app.core.config import get_settings
 
 @lru_cache
 def get_supabase_client() -> Client:
-    """Create and cache the Supabase client used by the application."""
+    """Create a Supabase client using the anonymous key."""
     settings = get_settings()
-
-    if not settings.supabase_url:
-        raise RuntimeError("SUPABASE_URL is not configured.")
-
-    if not settings.supabase_anon_key:
-        raise RuntimeError("SUPABASE_ANON_KEY is not configured.")
 
     return create_client(
         settings.supabase_url,
         settings.supabase_anon_key,
+    )
+
+
+@lru_cache
+def get_supabase_service_client() -> Client:
+    """Create a server-only Supabase client using the service-role key."""
+    settings = get_settings()
+
+    return create_client(
+        settings.supabase_url,
+        settings.supabase_service_role_key,
     )
