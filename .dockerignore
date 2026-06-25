@@ -1,0 +1,15 @@
+.git
+.gitignore
+.venv
+.env
+.pytest_cache
+__pycache__
+*.py[cod]
+.DS_Store
+.vscode
+.idea
+uploads
+tmp
+htmlcov
+.coverage
+backend/scripts/debug_retrieval.py
