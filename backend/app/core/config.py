@@ -14,20 +14,24 @@ class Settings(BaseSettings):
     supabase_anon_key: str = ""
     supabase_service_role_key: str = ""
 
+    gemini_api_key: str
+    gemini_embedding_model: str = "gemini-embedding-2"
+    gemini_embedding_dimension: int = 768
+    gemini_generation_model: str = "gemini-2.5-flash"
+    GEMINI_CHAT_MODEL: str = "gemini-2.5-flash"
+
+    pinecone_api_key: str
+    pinecone_index_name: str
+    pinecone_namespace: str = "documents"
+
+    min_retrieval_score: float = 0.70
+
     model_config = SettingsConfigDict(
         env_file=".env",
         env_file_encoding="utf-8",
         case_sensitive=False,
         extra="ignore",
     )
-
-    gemini_api_key: str
-    gemini_embedding_model: str = "gemini-embedding-2"
-    gemini_embedding_dimension: int = 768
-
-    pinecone_api_key: str
-    pinecone_index_name: str
-    pinecone_namespace: str = "documents"
 
 
 @lru_cache

@@ -16,31 +16,37 @@ class GeminiEmbeddingService:
         self.dimension = settings.gemini_embedding_dimension
         self.client = genai.Client(api_key=settings.gemini_api_key)
 
-    def embed_documents(self, texts: list[str]) -> list[list[float]]:
-        """Embed document chunks for semantic retrieval."""
-        if not texts:
-            return []
-
-        response = self.client.models.embed_content(
-            model=self.model_name,
-            contents=texts,
-            config=types.EmbedContentConfig(
-                task_type="RETRIEVAL_DOCUMENT",
-                output_dimensionality=self.dimension,
-            ),
-        )
-
-        return [embedding.values for embedding in response.embeddings]
-
-    def embed_query(self, text: str) -> list[float]:
-        """Embed a user question for semantic search."""
+    def _embed_one(
+        self,
+        *,
+        text: str,
+        task_type: str,
+    ) -> list[float]:
+        """Embed one text using the normal Gemini embedding request path."""
         response = self.client.models.embed_content(
             model=self.model_name,
             contents=text,
             config=types.EmbedContentConfig(
-                task_type="RETRIEVAL_QUERY",
+                task_type=task_type,
                 output_dimensionality=self.dimension,
             ),
         )
 
         return response.embeddings[0].values
+
+    def embed_documents(self, texts: list[str]) -> list[list[float]]:
+        """Embed document chunks without using Gemini batch embedding."""
+        return [
+            self._embed_one(
+                text=text,
+                task_type="RETRIEVAL_DOCUMENT",
+            )
+            for text in texts
+        ]
+
+    def embed_query(self, text: str) -> list[float]:
+        """Embed one user question for semantic retrieval."""
+        return self._embed_one(
+            text=text,
+            task_type="RETRIEVAL_QUERY",
+        )

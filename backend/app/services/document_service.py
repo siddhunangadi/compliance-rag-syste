@@ -1,15 +1,12 @@
 from pathlib import Path
-from uuid import UUID, uuid4
+from uuid import uuid4
 
 from fastapi import HTTPException, UploadFile, status
 
-from app.services.supabase_client import (
-    get_supabase_client,
-    get_supabase_service_client,
-)
+from app.services.supabase_client import get_supabase_service_client
 
 ALLOWED_EXTENSIONS = {".pdf", ".docx", ".txt", ".csv", ".xlsx"}
-MAX_FILE_SIZE_BYTES = 20 * 1024 * 1024  # 20 MB
+MAX_FILE_SIZE_BYTES = 20 * 1024 * 1024
 DOCUMENTS_BUCKET = "documents"
 
 
@@ -75,6 +72,7 @@ class DocumentService:
                         "mime_type": uploaded_file.content_type
                         or "application/octet-stream",
                         "status": "uploaded",
+                        "error_message": None,
                     }
                 )
                 .execute()
@@ -97,8 +95,8 @@ class DocumentService:
         response = (
             client.table("documents")
             .select(
-                "id, file_name, file_size_bytes, mime_type, "
-                "status, page_count, created_at"
+                "id, file_name, file_size_bytes, mime_type, status, "
+                "error_message, page_count, created_at"
             )
             .eq("user_id", user_id)
             .order("created_at", desc=True)
@@ -106,6 +104,71 @@ class DocumentService:
         )
 
         return response.data
+
+    def get_document(
+        self,
+        *,
+        document_id: str,
+        user_id: str,
+    ) -> dict | None:
+        """Return one document only if it belongs to the current user."""
+        client = get_supabase_service_client()
+
+        response = (
+            client.table("documents")
+            .select(
+                "id, file_name, storage_path, status, error_message"
+            )
+            .eq("id", document_id)
+            .eq("user_id", user_id)
+            .maybe_single()
+            .execute()
+        )
+
+        return response.data
+
+    def delete_document_data(
+        self,
+        *,
+        document_id: str,
+        user_id: str,
+        storage_path: str,
+    ) -> None:
+        """Delete document rows and stored file after vector cleanup."""
+        client = get_supabase_service_client()
+
+        try:
+            (
+                client.table("document_chunks")
+                .delete()
+                .eq("document_id", document_id)
+                .eq("user_id", user_id)
+                .execute()
+            )
+
+            (
+                client.table("document_contents")
+                .delete()
+                .eq("document_id", document_id)
+                .eq("user_id", user_id)
+                .execute()
+            )
+
+            (
+                client.table("documents")
+                .delete()
+                .eq("id", document_id)
+                .eq("user_id", user_id)
+                .execute()
+            )
+
+            client.storage.from_(DOCUMENTS_BUCKET).remove([storage_path])
+
+        except Exception as exc:
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail="Unable to delete document completely. Please try again.",
+            ) from exc
 
     def update_document_status(
         self,
@@ -136,5 +199,6 @@ class DocumentService:
         )
 
         return result.data[0]
+
 
 document_service = DocumentService()
