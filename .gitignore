@@ -22,3 +22,5 @@ htmlcov/
 
 # Local uploaded files
 uploads/
+# Local temporary files
+tmp/
