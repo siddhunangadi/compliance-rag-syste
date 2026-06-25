@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from typing import Any
+
 from pinecone import Pinecone
 
 from app.core.config import get_settings
@@ -12,8 +14,26 @@ class PineconeVectorService:
         settings = get_settings()
 
         self.namespace = settings.pinecone_namespace
-        self.client = Pinecone(api_key=settings.pinecone_api_key)
-        self.index = self.client.Index(settings.pinecone_index_name)
+        self._client: Pinecone | None = None
+        self._index: Any | None = None
+
+    @property
+    def client(self) -> Pinecone:
+        """Create the Pinecone client only when vector work is requested."""
+        if self._client is None:
+            settings = get_settings()
+            self._client = Pinecone(api_key=settings.pinecone_api_key)
+
+        return self._client
+
+    @property
+    def index(self) -> Any:
+        """Resolve the Pinecone index only when a vector operation needs it."""
+        if self._index is None:
+            settings = get_settings()
+            self._index = self.client.Index(settings.pinecone_index_name)
+
+        return self._index
 
     def upsert_document_chunks(
         self,
@@ -28,7 +48,7 @@ class PineconeVectorService:
         if len(chunks) != len(embeddings):
             raise ValueError("Each chunk must have exactly one embedding.")
 
-        vectors = []
+        vectors: list[dict[str, Any]] = []
 
         for chunk, embedding in zip(chunks, embeddings, strict=True):
             vectors.append(
@@ -73,7 +93,7 @@ class PineconeVectorService:
         user_id: str,
         query_embedding: list[float],
         top_k: int,
-    ) -> list[dict]:
+    ) -> list[dict[str, Any]]:
         """Search only the authenticated user's document chunks."""
         response = self.index.query(
             vector=query_embedding,
@@ -85,7 +105,7 @@ class PineconeVectorService:
             include_metadata=True,
         )
 
-        results = []
+        results: list[dict[str, Any]] = []
 
         for match in response.matches:
             metadata = match.metadata or {}
@@ -102,3 +122,6 @@ class PineconeVectorService:
             )
 
         return results
+
+
+pinecone_vector_service = PineconeVectorService()
