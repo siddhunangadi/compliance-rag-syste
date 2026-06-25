@@ -107,5 +107,34 @@ class DocumentService:
 
         return response.data
 
+    def update_document_status(
+        self,
+        *,
+        document_id: str,
+        user_id: str,
+        status: str,
+        error_message: str | None = None,
+        page_count: int | None = None,
+    ) -> dict:
+        """Update processing information for one user-owned document."""
+        client = get_supabase_service_client()
+
+        payload: dict[str, str | int | None] = {
+            "status": status,
+            "error_message": error_message,
+        }
+
+        if page_count is not None:
+            payload["page_count"] = page_count
+
+        result = (
+            client.table("documents")
+            .update(payload)
+            .eq("id", document_id)
+            .eq("user_id", user_id)
+            .execute()
+        )
+
+        return result.data[0]
 
 document_service = DocumentService()
