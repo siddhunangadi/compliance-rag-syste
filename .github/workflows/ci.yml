@@ -15,7 +15,6 @@ jobs:
     runs-on: ubuntu-latest
 
     env:
-      APP_ENV: testing
       GEMINI_API_KEY: test-gemini-api-key
       PINECONE_API_KEY: test-pinecone-api-key
       PINECONE_INDEX_NAME: test-pinecone-index
