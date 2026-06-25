@@ -16,6 +16,7 @@ ALLOWED_TYPES = ["pdf", "docx", "txt", "csv", "xlsx"]
 
 @st.cache_resource
 def get_supabase_client() -> Client:
+    """Create and cache the Supabase client."""
     return create_client(SUPABASE_URL, SUPABASE_ANON_KEY)
 
 
@@ -111,6 +112,7 @@ def upload_document(uploaded_file) -> None:
         if response.status_code == 201:
             st.success(f"Uploaded: {response.json()['file_name']}")
             st.rerun()
+            return
 
         detail = response.json().get("detail", "Upload failed.")
         st.error(detail)
@@ -119,17 +121,93 @@ def upload_document(uploaded_file) -> None:
         st.error(f"Could not reach the backend: {exc}")
 
 
+def remove_duplicate_results(results: list[dict]) -> list[dict]:
+    """Keep only one result for identical retrieved chunk content."""
+    unique_results = []
+    seen_contents = set()
+
+    for result in results:
+        content_key = result["content"].strip()
+
+        if content_key not in seen_contents:
+            seen_contents.add(content_key)
+            unique_results.append(result)
+
+    return unique_results
+
+
+def show_document_search() -> None:
+    """Render semantic search UI for the signed-in user's documents."""
+    st.divider()
+    st.subheader("Search my documents")
+    st.caption("Searches only the documents uploaded by your account.")
+
+    search_query = st.text_input(
+        "Ask a question about your uploaded documents",
+        placeholder="Example: Who can access customer data?",
+        key="search_query",
+    )
+
+    if st.button("Search documents", type="primary"):
+        cleaned_query = search_query.strip()
+
+        if len(cleaned_query) < 3:
+            st.warning("Enter at least 3 characters.")
+            return
+
+        try:
+            with st.spinner("Searching your documents..."):
+                response = requests.post(
+                    f"{BACKEND_URL}/api/v1/search",
+                    headers=get_auth_headers(),
+                    json={
+                        "query": cleaned_query,
+                        "top_k": 5,
+                    },
+                    timeout=30,
+                )
+
+            if response.status_code != 200:
+                detail = response.json().get("detail", "Search failed.")
+                st.error(detail)
+                return
+
+            search_data = response.json()
+            results = search_data.get("results", [])
+            results = remove_duplicate_results(results)
+
+            if not results:
+                st.info("No matching document chunks found.")
+                return
+
+            st.success(f"Found {len(results)} matching chunk(s).")
+
+            for index, result in enumerate(results, start=1):
+                st.markdown(
+                    f"#### {index}. {result['file_name']} "
+                    f"— chunk {result['chunk_index']}"
+                )
+                st.caption(f"Similarity score: {result['score']:.3f}")
+                st.write(result["content"])
+                st.divider()
+
+        except requests.RequestException as exc:
+            st.error(f"Could not reach the backend: {exc}")
+
+
 def show_document_dashboard() -> None:
     """Render the authenticated document dashboard."""
     session = st.session_state.session
     user = session.user
 
     st.title("Compliance RAG System")
-    st.caption("Upload compliance documents. Processing and Q&A come next.")
+    st.caption("Upload compliance documents and search them semantically.")
 
     left, right = st.columns([4, 1])
+
     with left:
         st.write(f"Signed in as **{user.email}**")
+
     with right:
         if st.button("Sign out"):
             get_supabase_client().auth.sign_out()
@@ -144,7 +222,7 @@ def show_document_dashboard() -> None:
         type=ALLOWED_TYPES,
     )
 
-    if uploaded_file and st.button("Upload document", type="primary"):
+    if uploaded_file and st.button("Upload document"):
         upload_document(uploaded_file)
 
     st.divider()
@@ -162,21 +240,22 @@ def show_document_dashboard() -> None:
 
             if not documents:
                 st.info("No documents uploaded yet.")
-                return
-
-            for document in documents:
-                st.markdown(f"**{document['file_name']}**")
-                st.caption(
-                    f"{document['mime_type']} · "
-                    f"{document['file_size_bytes']} bytes · "
-                    f"Status: {document['status']}"
-                )
-                st.divider()
+            else:
+                for document in documents:
+                    st.markdown(f"**{document['file_name']}**")
+                    st.caption(
+                        f"{document['mime_type']} · "
+                        f"{document['file_size_bytes']} bytes · "
+                        f"Status: {document['status']}"
+                    )
+                    st.divider()
         else:
             st.error(response.json().get("detail", "Could not load documents."))
 
     except requests.RequestException as exc:
         st.error(f"Could not reach the backend: {exc}")
+
+    show_document_search()
 
 
 def main() -> None:

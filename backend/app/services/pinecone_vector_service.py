@@ -50,3 +50,38 @@ class PineconeVectorService:
                 vectors=vectors,
                 namespace=self.namespace,
             )
+
+    def query_user_chunks(
+        self,
+        *,
+        user_id: str,
+        query_embedding: list[float],
+        top_k: int,
+    ) -> list[dict]:
+        """Search only the authenticated user's document chunks."""
+        response = self.index.query(
+            vector=query_embedding,
+            top_k=top_k,
+            namespace=self.namespace,
+            filter={
+                "user_id": {"$eq": user_id},
+            },
+            include_metadata=True,
+        )
+
+        results = []
+
+        for match in response.matches:
+            metadata = match.metadata or {}
+
+            results.append(
+                {
+                    "document_id": metadata["document_id"],
+                    "file_name": metadata["file_name"],
+                    "chunk_index": metadata["chunk_index"],
+                    "content": metadata["content"],
+                    "score": float(match.score),
+                }
+            )
+
+        return results
