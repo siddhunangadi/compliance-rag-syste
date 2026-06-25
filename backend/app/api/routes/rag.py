@@ -1,6 +1,7 @@
 import re
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, HTTPException, status
+from google.genai.errors import ClientError
 
 from app.api.dependencies import get_current_user
 from app.api.rate_limit import enforce_user_rate_limit
@@ -15,8 +16,16 @@ router = APIRouter(prefix="/rag", tags=["RAG"])
 rag_answer_service = RAGAnswerService()
 
 NOT_FOUND_ANSWER = "I could not find an answer in your uploaded documents."
+GENERATION_RATE_LIMIT_MESSAGE = (
+    "The AI answer service is temporarily rate-limited. "
+    "Please wait a moment and try again."
+)
 
 CITATION_PATTERN = re.compile(r"\[(\d+)\]")
+RETRY_DELAY_PATTERN = re.compile(
+    r"(?:retry in|retryDelay['\"]?\s*:\s*['\"]?)(\d+)(?:\.\d+)?s",
+    re.IGNORECASE,
+)
 
 
 def extract_citation_numbers(answer: str) -> list[int]:
@@ -51,6 +60,33 @@ def answer_has_valid_citations(
     )
 
 
+def get_retry_after_seconds(error: ClientError) -> int | None:
+    """
+    Extract Gemini's suggested retry delay when it is present.
+
+    Gemini errors commonly include text such as:
+    "Please retry in 49.19s."
+    """
+    match = RETRY_DELAY_PATTERN.search(str(error))
+
+    if not match:
+        return None
+
+    return max(int(match.group(1)), 1)
+
+
+def is_gemini_rate_limit_error(error: ClientError) -> bool:
+    """Return True when Gemini rejected the request because of quota/rate limits."""
+    error_text = str(error).upper()
+
+    return (
+        getattr(error, "code", None) == 429
+        or "RESOURCE_EXHAUSTED" in error_text
+        or "QUOTA EXCEEDED" in error_text
+        or "TOO MANY REQUESTS" in error_text
+    )
+
+
 @router.post(
     "/ask",
     response_model=AskQuestionResponse,
@@ -80,10 +116,27 @@ def ask_question(
             citations=[],
         )
 
-    answer = rag_answer_service.generate_answer(
-        question=payload.question,
-        sources=sources,
-    )
+    try:
+        answer = rag_answer_service.generate_answer(
+            question=payload.question,
+            sources=sources,
+        )
+    except ClientError as error:
+        if is_gemini_rate_limit_error(error):
+            retry_after_seconds = get_retry_after_seconds(error)
+
+            headers = {}
+
+            if retry_after_seconds is not None:
+                headers["Retry-After"] = str(retry_after_seconds)
+
+            raise HTTPException(
+                status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+                detail=GENERATION_RATE_LIMIT_MESSAGE,
+                headers=headers,
+            ) from error
+
+        raise
 
     if not answer_has_valid_citations(
         answer=answer,
